@@ -291,8 +291,7 @@ class Old_Core_Files {
 	}
 
 	private function get_files_group( $group ) {
-		if ( ! empty( $this->filtered_files_cache[ $group ] ) )
-			return $this->filtered_files_cache[ $group ];
+		return ( ! empty( $this->filtered_files_cache[ $group ] ) ) ? $this->filtered_files_cache[ $group ] : array();
 	}
 
 	/**

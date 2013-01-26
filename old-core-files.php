@@ -20,6 +20,15 @@
  *
  * - Email administrator when old files were detected 
  * 	(most probably will happen right after an upgrade)
+ *
+ * Important things TODO:
+ *
+ * - Caching (added by maor)
+ *   Iteration through the filesystem is an expensive task. I'm thinking (maor) maybe we should
+ * 	 cache the file lists with a presistent cache for a short period of time. Plus, we can add
+ * 	 a button that allows the user to clear the cache, or in their word "re-scan" the file base.
+ * 	 This can be a nice approach, where we do the first scan, cache the files for a long period of
+ * 	 time. Then allow the user to do a rescan in the entire filebase.
  */
 
 /**
@@ -29,19 +38,68 @@
  */
 class Old_Core_Files {
 
+	/**
+	 * Holds this instance. Prevents duplicate instances.
+	 *
+	 * @access private
+	 * @var Old_Core_Files
+	 */
+	private static $instance;
+
+	/**
+	 * Holds the basename of the plugin.
+	 *
+	 * @access private
+	 * @var string object
+	 */
 	private static $basename;
 
+	/**
+	 * The ID of the page, as set by WordPress
+	 *
+	 * @access private
+	 * @var string
+	 */
 	private $page;
+
+	/**
+	 * The slug of the parent page.
+	 *
+	 * @access private
+	 * @var string
+	 */
 	private $parent_slug = 'tools.php';
+
+	/**
+	 * The slug of the main page.
+	 *
+	 * @access private
+	 * @var string
+	 */
 	private $page_slug = 'old-core-files';
+
+	/**
+	 * The capability required for viewing the main page.
+	 *
+	 * @access private
+	 * @var string
+	 */
 	private $view_cap = 'manage_options';
+
+	/**
+	 * Cache of files list.
+	 *
+	 * @access private
+	 * @var string
+	 */
+	private $filtered_files_cache = array();
 
 	/**
 	 * Hold on to your seats!
 	 *
 	 * @since 1.0
 	 */
-	function __construct() {
+	public function __construct() {
 		// This plugin only runs in the admin, but we need it initialized on init
 		add_action( 'init', array( $this, 'action_init' ) );
 
@@ -51,7 +109,7 @@ class Old_Core_Files {
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
 	}
 
-	function action_init() {
+	public function action_init() {
 		if ( ! is_admin() )
 			return;
 
@@ -81,7 +139,7 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	 */
-	function action_links( $links, $file ) {
+	public function action_links( $links, $file ) {
 		$links[] = sprintf( '<a href="%s">%s</a>', menu_page_url( $this->page_slug, false ), __( 'Settings' /*, 'ocf'*/ ) );
 		return $links;
 	}
@@ -91,7 +149,7 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	 */
-	function admin_menu() {
+	public function admin_menu() {
 		$this->page = add_submenu_page(
 			$this->parent_slug, __( 'Old Core Files', 'ocf' ), __( 'Old Core Files', 'ocf' ), $this->view_cap, $this->page_slug, array( $this, 'dashboard_page' ) );
 
@@ -105,7 +163,7 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	 */
-	function page_actions() {
+	public function page_actions() {
 		do_action( "add_meta_boxes_$this->page", null );
 		do_action( 'add_meta_boxes', $this->page, null );
 
@@ -117,6 +175,9 @@ class Old_Core_Files {
 
 		// Enqueue WordPress' postbox script for handling the metaboxes 
 		wp_enqueue_script( 'postbox' );
+
+		// Initialize WP_Filesystem for use in our page
+		$this->initialize_filesystem();
 	}
 
 	/**
@@ -125,7 +186,7 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	*/
-	function footer_scripts() {
+	public function footer_scripts() {
 		?>
 		<script>postboxes.add_postbox_toggles( pagenow );</script>
 		<?php
@@ -136,18 +197,15 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	 */
-	function add_meta_boxes() {
+	public function add_meta_boxes() {
 		add_meta_box( 'list-files', __( 'Old Core Files', 'ocf' ), array( $this, 'metabox_list_files' ), $this->page, 'normal', 'high' );
 		add_meta_box( 'about', __( 'About', 'ocf' ), array( $this, 'metabox_about' ), $this->page, 'side', 'high' );
+		
+		do_action( 'ocf_add_meta_boxes' );
 	}
 
-	/**
-	 * Magic happens right here.
-	 *
-	 * @since 1.0
-	 */
-	function metabox_list_files() {
-		global $wp_filesystem, $wp_version, $_old_files;
+	private function initialize_filesystem() {
+		global $wp_filesystem, $wp_version;
 
 		// Require the file that stores $_old_files
 		require_once ABSPATH . 'wp-admin/includes/update-core.php';
@@ -161,6 +219,17 @@ class Old_Core_Files {
 		// If $wp_filesystem isn't there, make it be there!
 		if ( ! $wp_filesystem )
 			WP_Filesystem();
+	}
+
+	/**
+	 * Return files from $_old_files based on a fixed condition
+	 *
+	 * @since 1.0
+	 * @param  string $condition The type of condition
+	 * @return array Array of files based on the condition
+	 */
+	private function filter_old_files( $condition ) {
+		global $wp_filesystem, $_old_files;
 
 		/**
 		 * Not sure why I had to add this. Maybe shuffling through the filesystem
@@ -170,23 +239,97 @@ class Old_Core_Files {
 		@set_time_limit( 300 );
 
 		$path_to_wp = trailingslashit( $wp_filesystem->abspath() );
-		$existing_old_files = array();
+		$filtered_files = array();
 
-		// Pile up old, existing files
-		foreach ( $_old_files as $old_file ) {
-			if ( $wp_filesystem->exists( $path_to_wp . $old_file ) )
-				$existing_old_files[] = $old_file;
+		/**
+		 * An idea - saving an array of files for every filter/condition creates
+		 * duplicate entries across groups.
+		 * My other idea is to map each file to its group. That instead of this:
+		 *
+		 *  - Main Container Array
+		 *  	- existing (group)
+		 *  		- wp-admin/import-rss.php
+		 *  		- wp-admin/execute-pings.php
+		 *  		- wp-images/get-firefox.png
+		 *  	- all (group)
+		 *  		- ...
+		 *  	- extensible (group)
+		 *  		- wp-admin/import-rss.php
+		 *  		- wp-admin/cat-js.php
+		 *
+		 * We can have:
+		 *
+		 * 	- Main Container Array
+		 * 		- wp-admin/import-rss.php => array( 'existing', 'extensible' )
+		 * 		- ...
+		 */
+
+		switch ( $condition ) {
+			case 'existing':
+				// Pile up old, existing files
+				foreach ( $_old_files as $old_file )
+					if ( $wp_filesystem->exists( $path_to_wp . $old_file ) )
+						$filtered_files[] = $old_file;
+				break;
+			case 'all':
+				$filtered_files = &$_old_files;
+				break;
+			default:
+				// We don't want others changing core functions (the user expects them to work)
+				// Here they can use their custom filtering method
+				$filtered_files = apply_filters( "ocf_filter_files_$condition", $filtered_files, $_old_files );
 		}
+		$this->filtered_files_cache[ $condition ] = $filtered_files;
+	}
+
+	private function iterate_groups( $groups ) {
+		array_walk( $groups, array( $this, 'filter_old_files' ) );
+	}
+
+	private function count_group( $filter ) {
+		return ( ! empty( $this->filtered_files_cache[ $filter ] ) ) ? count( $this->filtered_files_cache[ $filter ] ) : 0;
+	}
+
+	private function get_files_group( $group ) {
+		if ( ! empty( $this->filtered_files_cache[ $group ] ) )
+			return $this->filtered_files_cache[ $group ];
+	}
+
+	/**
+	 * Magic happens right here.
+	 *
+	 * @since 1.0
+	 */
+	public function metabox_list_files() {
+		$allowed_filters = apply_filters( 'ocf_filter_methods', array(
+			'existing' => __( 'Existing', 'ocf' ),
+			'all' => __( 'All', 'ocf' ),
+		) );
+		$selected_filter = 'existing'; // default - should be variable
+
+		if ( isset( $_GET['filter'] ) && array_key_exists( $_GET['filter'], $allowed_filters ) )
+			$selected_filter = $_GET['filter'];
+		
+		// Collect counters
+		$this->iterate_groups( array_keys( $allowed_filters ) );
 		?>
 		<ul class="subsubsub">
-			<li class="all"><a href="<?php echo esc_url( add_query_arg( 'show', 'all' ) ); ?>"><?php echo __( 'All', 'ocf' ); ?> <span class="count">(<?php echo count( $_old_files ); ?>)</span></a> |</li>
-			<li class="existing"><a href="<?php echo esc_url( add_query_arg( 'show', 'existing' ) ); ?>" class="current"><?php echo __( 'Existing', 'ocf' ); ?> <span class="count">(<?php echo count( $existing_old_files ); ?>)</span></a></li>
+			<?php foreach ( $allowed_filters as $filter => $label ) :
+					$css_class = ( $filter == $selected_filter ) ? 'current' : 'inactive'; 
+			?>
+			<li class="<?php echo sanitize_html_class( $filter ); ?>">
+				<a class="<?php echo $css_class; ?>" href="<?php echo esc_url( add_query_arg( 'filter', $filter ) ); ?>"><?php echo esc_html( $label ); ?> <span class="count">(<?php echo absint( $this->count_group( $filter ) ); ?>)</span></a>
+				<?php echo $label == end( $allowed_filters ) ? '' : ' |'; // don't display seperator at the end ?>
+			</li>
+			<?php endforeach; ?>
 		</ul>
 		
 		<br class="clear" />
 
 		<?php
-		if ( ! empty( $existing_old_files ) ) :
+		$files_to_list = $this->get_files_group( $selected_filter );
+
+		if ( ! empty( $files_to_list ) ) :
 			?>
 			<p><?php esc_html_e( 'We have found some old files in this WordPress installation. Please review the files below.', 'ocf' ); ?></p>
 
@@ -198,14 +341,16 @@ class Old_Core_Files {
 					</tr>
 				</thead>
 				<tbody>
-				<?php foreach ( $existing_old_files as $existing_file ) : ?>
+				<?php foreach ( $files_to_list as $existing_file ) : ?>
 					<tr>
 						<td>
 							<code><?php echo esc_html( $existing_file ); ?></code>
 						</td>
 						<td class="action-links">
 							<?php if ( current_user_can( $this->view_cap ) ) : // Double check befor allowing 'delete' action ?>
-							<span class="trash"><a href="<? admin_url( $this->parent_slug . '?page=' . $this->page_slug ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete', 'ocf' ); ?></a></span>
+							<span class="trash">
+								<a href="<?php echo esc_url( wp_nonce_url( add_query_arg( 'delete', $existing_file ) ) ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete', 'ocf' ); ?></a>
+							</span>
 							<?php endif; ?>
 						</td>
 					</tr>
@@ -213,14 +358,14 @@ class Old_Core_Files {
 				</tbody>
 				<tfoot>
 					<tr>
-						<td>
-							<strong><?php printf( __( 'Old Files Count: %d', 'ocf' ), count( $existing_old_files ) ); ?></strong>
-						</td>
-						<td class="action-links">
+						<th>
+							<?php printf( __( '%d files in total', 'ocf' ), count( $files_to_list ) ); ?>
+						</th>
+						<th class="action-links">
 							<?php if ( current_user_can( $this->view_cap ) ) : // Double check befor allowing 'delete' action ?>
-							<span class="trash"><a href="<?php echo admin_url( add_query_arg( 'action', 'trash-all' ) ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete All', 'ocf' ); ?></a></span>
+							<span class="trash"><a class="button" href="<?php echo admin_url( add_query_arg( 'action', 'trash-all' ) ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete All', 'ocf' ); ?></a></span>
 							<?php endif; ?>
-						</td>
+						</th>
 					</tr>
 				</tfoot>
 			</table><?php
@@ -230,7 +375,7 @@ class Old_Core_Files {
 		endif;
 	}
 
-	function metabox_about() {
+	public function metabox_about() {
 		?>
 		<h4><?php esc_html_e( 'What is this about?', 'ocf' ); ?></h4>
 		<p><?php esc_html_e( 'When core is being upgraded, usually some files are no longer used by WordPress, and they are set for removal. On some occasions, PHP has no permissions to delete these files, and they stay on the server, possibly exposing your site to attackers.', 'ocf' ); ?></p>
@@ -242,7 +387,7 @@ class Old_Core_Files {
 	 *
 	 * @since 1.0
 	 */
-	function dashboard_page() {
+	public function dashboard_page() {
 		?>
 		<div class="wrap">
 
@@ -291,7 +436,7 @@ class Old_Core_Files {
 	<?php
 	}
 
-	function assert_filesystem_method( $method, $args ) {
+	public function assert_filesystem_method( $method, $args ) {
 		/**
 		 * Here is where we need to do a crazy calculation of
 		 * what type of filesystem transport we should use
@@ -300,10 +445,44 @@ class Old_Core_Files {
 		return $method;
 	}
 
-	function activate() {
+	public function activate() {
 		// Nothing to do here right now
 	}
 }
 
 global $old_core_files_instance;
 $old_core_files_instance = new Old_Core_Files;
+
+
+/**
+ * Sample extensding application
+ *
+ * This extension will add a new filter option, that will list only
+ * old files from the /wp-admin/ directory. JUST SAYING.
+ */
+class Extending_OCF_Test {
+	var $filter = 'wp_admin_files';
+
+	function __construct() {
+		// Register the tab, we will call it "group", "filter" or "condition" accross the plugin
+		add_filter( 'ocf_filter_methods', array( $this, 'add_group' ) );
+		// Attach the filtering function for this tab
+		add_filter( "ocf_filter_files_$this->filter", array( $this, 'filter_wp_admin_files' ), 10, 2 );
+	}
+
+	function add_group( $groups ) {
+		$groups[ $this->filter ] = __( 'wp-admin Files' );
+		return $groups;
+	}
+
+	function filter_wp_admin_files( $filtered_files, $old_files ) {
+		$only_wp_admin_files = array();
+
+		foreach ( $old_files as $file )
+			if ( false !== strpos( $file, 'wp-admin/' ) ) // if this file is a /wp-admin/ file
+				$only_wp_admin_files[] = $file;
+
+		return $only_wp_admin_files;
+	}
+}
+new Extending_OCF_Test;

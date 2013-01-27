@@ -374,7 +374,7 @@ class Old_Core_Files {
 	public function metabox_about() {
 		?>
 		<h4><?php esc_html_e( 'What is this about?', 'ocf' ); ?></h4>
-		<p><?php esc_html_e( 'When core is being upgraded, usually some files are no longer used by WordPress, and they are set for removal. On some occasions, PHP has no permissions to delete these files, and they stay on the server, possibly exposing your site to attackers.', 'ocf' ); ?></p>
+		<p><?php esc_html_e( 'When core is being upgraded, there are some files that are no longer needed by WordPress, and they are set for removal. On some occasions, PHP/Apache has no permissions to delete these files, and they stay on the server, potentially exposing your site to attacks (Not always the case, but who wants to keep old files anyway?).', 'ocf' ); ?></p>
 		<?php
 	}
 

@@ -10,18 +10,18 @@
  */
 
 /**
- * Description:
+ * =========================== DESCRIPTION ===========================
  * 
  * When core is being upgraded, usually some files are no longer used by WordPress, and they are set for removal.
  * On some occasions, PHP has no permissions to delete these files, and they stay on the server, possibly
  * exposing your site to attackers.
  *
- * Optional Features TODO:
+ * =========================== OPTIONAL FEATURES TODO: ===============
  *
  * - Email administrator when old files were detected 
  * 	(most probably will happen right after an upgrade)
  *
- * Important things TODO:
+ * =========================== IMPORTNAT THINGS TODO: ================
  *
  * - Caching (added by maor)
  *   Iteration through the filesystem is an expensive task. I'm thinking (maor) maybe we should
@@ -29,6 +29,10 @@
  * 	 a button that allows the user to clear the cache, or in their word "re-scan" the file base.
  * 	 This can be a nice approach, where we do the first scan, cache the files for a long period of
  * 	 time. Then allow the user to do a rescan in the entire filebase.
+ *
+ * =========================== NOTES: =================================
+ *
+ * - Want to extend this plugin? Check out ocf-extension-example.php in the plugin's directory
  */
 
 /**
@@ -37,14 +41,6 @@
  * @since 1.0
  */
 class Old_Core_Files {
-
-	/**
-	 * Holds this instance. Prevents duplicate instances.
-	 *
-	 * @access private
-	 * @var Old_Core_Files
-	 */
-	private static $instance;
 
 	/**
 	 * Holds the basename of the plugin.
@@ -87,12 +83,12 @@ class Old_Core_Files {
 	private $view_cap = 'manage_options';
 
 	/**
-	 * Cache of files list.
+	 * Temporary cache/pool of files groups.
 	 *
 	 * @access private
 	 * @var string
 	 */
-	private $filtered_files_cache = array();
+	private $filtered_files_pool = array();
 
 	/**
 	 * Hold on to your seats!
@@ -279,7 +275,8 @@ class Old_Core_Files {
 				// Here they can use their custom filtering method
 				$filtered_files = apply_filters( "ocf_filter_files_$condition", $filtered_files, $_old_files );
 		}
-		$this->filtered_files_cache[ $condition ] = $filtered_files;
+		// Add the results of the current filter to the main pool
+		$this->filtered_files_pool[ $condition ] = $filtered_files;
 	}
 
 	private function iterate_groups( $groups ) {
@@ -287,11 +284,11 @@ class Old_Core_Files {
 	}
 
 	private function count_group( $filter ) {
-		return ( ! empty( $this->filtered_files_cache[ $filter ] ) ) ? count( $this->filtered_files_cache[ $filter ] ) : 0;
+		return ( ! empty( $this->filtered_files_pool[ $filter ] ) ) ? count( $this->filtered_files_pool[ $filter ] ) : 0;
 	}
 
 	private function get_files_group( $group ) {
-		return ( ! empty( $this->filtered_files_cache[ $group ] ) ) ? $this->filtered_files_cache[ $group ] : array();
+		return ( ! empty( $this->filtered_files_pool[ $group ] ) ) ? $this->filtered_files_pool[ $group ] : array();
 	}
 
 	/**
@@ -362,7 +359,7 @@ class Old_Core_Files {
 						</th>
 						<th class="action-links">
 							<?php if ( current_user_can( $this->view_cap ) ) : // Double check befor allowing 'delete' action ?>
-							<span class="trash"><a class="button" href="<?php echo admin_url( add_query_arg( 'action', 'trash-all' ) ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete All', 'ocf' ); ?></a></span>
+							<span class="trash"><a class="button" href="<?php echo esc_url( add_query_arg( 'action', 'trash-all' ) ); /* Add nonce, Add 'action=delete', Add File name (for deletion) */ ?>"><?php echo __( 'Delete All', 'ocf' ); ?></a></span>
 							<?php endif; ?>
 						</th>
 					</tr>
@@ -449,39 +446,7 @@ class Old_Core_Files {
 	}
 }
 
-global $old_core_files_instance;
-$old_core_files_instance = new Old_Core_Files;
-
-
-/**
- * Sample extensding application
- *
- * This extension will add a new filter option, that will list only
- * old files from the /wp-admin/ directory. JUST SAYING.
- */
-class Extending_OCF_Test {
-	var $filter = 'wp_admin_files';
-
-	function __construct() {
-		// Register the tab, we will call it "group", "filter" or "condition" accross the plugin
-		add_filter( 'ocf_filter_methods', array( $this, 'add_group' ) );
-		// Attach the filtering function for this tab
-		add_filter( "ocf_filter_files_$this->filter", array( $this, 'filter_wp_admin_files' ), 10, 2 );
-	}
-
-	function add_group( $groups ) {
-		$groups[ $this->filter ] = __( 'wp-admin Files' );
-		return $groups;
-	}
-
-	function filter_wp_admin_files( $filtered_files, $old_files ) {
-		$only_wp_admin_files = array();
-
-		foreach ( $old_files as $file )
-			if ( false !== strpos( $file, 'wp-admin/' ) ) // if this file is a /wp-admin/ file
-				$only_wp_admin_files[] = $file;
-
-		return $only_wp_admin_files;
-	}
+function ocf_load_old_core_files() {
+	return new Old_Core_Files;
 }
-new Extending_OCF_Test;
+add_action( 'plugins_loaded', 'ocf_load_old_core_files' );
